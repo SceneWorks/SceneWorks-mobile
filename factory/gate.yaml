@@ -1,0 +1,34 @@
+# Dark Factory merge gate policy for SceneWorks-mobile.
+# Read by the gate at each pull request's base commit. Sealed paths never merge through the factory;
+# protected ones need a security review and still escalate to a human after their checks.
+version: 4
+tiers:
+  sealed:
+    paths: [factory/, .github/, CODEOWNERS, docs/CODEOWNERS]
+    checks: [ci-green, review-pass, security-review]
+  protected:
+    paths:
+      - "**/*.xcodeproj/"
+      - "**/*.xcworkspace/"
+      - "**/*.xcscheme"
+      - "**/*.xcconfig"
+      - "**/*.entitlements"
+      - "**/Info.plist"
+      - "**/*.xctestplan"
+      - "**/Package.swift"
+      - "**/Package.resolved"
+      - .factory/
+    checks: [ci-green, review-pass, security-review, risk-threshold, new-tests-fail-on-base]
+  normal:
+    checks: [ci-green, review-pass, risk-threshold, new-tests-fail-on-base]
+  free:
+    paths: [README.md]
+    checks: [ci-green, review-pass]
+risk:
+  max_changed_lines: 400
+  max_changed_files: 20
+  max_fix_rounds: 3
+  max_blast_radius: high
+  max_hotspot: off
+  max_changeset_lines: 3000
+  max_changeset_files: 120

@@ -1,0 +1,5 @@
+# Sealed paths (factory/gate.yaml): changes need the owner's review; Dark Factory never merges them.
+/factory/        @michaeltrefry
+/.github/        @michaeltrefry
+/CODEOWNERS      @michaeltrefry
+/docs/CODEOWNERS @michaeltrefry

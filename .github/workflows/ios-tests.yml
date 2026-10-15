@@ -1,0 +1,83 @@
+name: ios-tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ios-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build and test (iOS Simulator)
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      PROJECT: SceneWorksMobile.xcodeproj
+      SCHEME: SceneWorksMobile
+      XCODE_MAJOR: "26"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          # The newest installed release of Xcode ${XCODE_MAJOR} (no betas or release candidates).
+          xcode=$(ls -d /Applications/Xcode_${XCODE_MAJOR}*.app | grep -Ev 'beta|Beta|_RC|Release_Candidate' | sort -V | tail -1)
+          echo "Selecting $xcode"
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+
+      - name: Create a simulator
+        id: sim
+        run: |
+          set -euo pipefail
+          runtime=$(xcrun simctl list runtimes -j | python3 -c '
+          import json, sys
+          rs = [r for r in json.load(sys.stdin)["runtimes"] if r.get("platform") == "iOS" and r.get("isAvailable")]
+          rs.sort(key=lambda r: [int(x) for x in r["version"].split(".")])
+          print(rs[-1]["identifier"])')
+          devicetype=$(xcrun simctl list devicetypes -j | python3 -c '
+          import json, sys
+          ds = [d for d in json.load(sys.stdin)["devicetypes"] if d.get("productFamily") == "iPhone"]
+          names = [d["identifier"] for d in ds if d["name"] in ("iPhone 17", "iPhone 16")]
+          print(names[0] if names else ds[-1]["identifier"])')
+          udid=$(xcrun simctl create "ci-iphone" "$devicetype" "$runtime")
+          echo "Created $udid ($devicetype, $runtime)"
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+
+      - name: Build for testing
+        run: |
+          set -euo pipefail
+          xcodebuild build-for-testing \
+            -project "$PROJECT" -scheme "$SCHEME" \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM= \
+            -quiet
+
+      - name: Run unit and UI tests
+        run: |
+          set -euo pipefail
+          xcodebuild test-without-building \
+            -project "$PROJECT" -scheme "$SCHEME" \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult"
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TestResults
+          path: ${{ runner.temp }}/TestResults.xcresult
+          if-no-files-found: ignore
+
+      - name: Delete the simulator
+        if: always() && steps.sim.outputs.udid != ''
+        run: xcrun simctl delete "${{ steps.sim.outputs.udid }}" || true

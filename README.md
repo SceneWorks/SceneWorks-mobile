@@ -9,8 +9,8 @@ The SceneWorks iOS app: the SwiftUI shell of SceneWorks' on-device image generat
 | Path | What |
 | --- | --- |
 | `SceneWorksMobile.xcodeproj` | The Xcode project (synchronized folders: a new file in a target's folder is part of that target, no project edit needed) and its one shared scheme, `SceneWorksMobile` |
-| `SceneWorksMobile/` | The app target (`com.sceneworks.mobile`, iOS 18.0+, iPhone): `SceneWorksMobileApp` (root: `GenerateView` wired with `FakeGenerationEngine`), `GenerateView`, `GenerateViewModel`, `Generation/GenerationEngine.swift` (`GenerationEngine` protocol, `GenerationRequest`/`GenerationEvent`, and the fake engine), `ContentView` (placeholder) |
-| `SceneWorksMobileTests/` | Unit tests (Swift Testing and XCTest), hosted in the app (`@testable import SceneWorksMobile`) |
+| `SceneWorksMobile/` | The app target (`com.sceneworks.mobile`, iOS 18.0+, iPhone): `SceneWorksMobileApp` (root: `GenerateView` wired with `FakeGenerationEngine`), `GenerateView`, `GenerateViewModel`, `Generation/GenerationEngine.swift` (`GenerationEngine` protocol, `GenerationRequest`/`GenerationEvent`, and the fake engine), `Provisioning/` (model provisioning, see below), `ContentView` (placeholder) |
+| `SceneWorksMobileTests/` | Unit tests (Swift Testing and XCTest), hosted in the app (`@testable import SceneWorksMobile`): `SceneWorksMobileTests` (engine and view model) and `ModelProvisionerTests` (provisioning over a fake `URLProtocol`, a fake `StorageInspector` and a temp directory) |
 | `SceneWorksMobileUITests/` | UI tests (XCUITest) |
 | `factory/gate.yaml`, `CODEOWNERS` | The Dark Factory merge gate's policy and the owners of its sealed paths |
 | `.github/workflows/ios-tests.yml` | CI: builds and runs both test targets on an iOS Simulator |
@@ -37,6 +37,39 @@ app.launch()
 ```
 
 The UI tests use `slow` for the cancel case and `fail` for the error/Retry case.
+
+## Model provisioning
+
+`SceneWorksMobile/Provisioning/` is the logic half of model delivery: no UI, just the manifest, the
+transfer and the verification.
+
+| File | What |
+| --- | --- |
+| `ModelManifest.swift` | `ModelManifest` (Codable): a `version` plus `components`, each with `name`, a relative `path`, a `url`, a `size` in bytes and a `sha256` hex digest |
+| `ModelProvisioner.swift` | The `ModelProvisioner` actor, `ProvisioningProgress` and the typed `ProvisioningError` |
+| `StorageInspector.swift` | The `StorageInspector` protocol and `VolumeStorageInspector`, the production inspector |
+
+A run of `provision()` writes each component that is not already present and verified into
+`Application Support/Models/<version>/`. Bytes land in a `.partial` file first; an interrupted
+transfer resumes with an HTTP `Range: bytes=<n>-` request that appends a `206` answer (Range rather
+than `URLSession` resume data, which a fake `URLProtocol` cannot produce). Only once the file's size
+and streamed SHA-256 both match the manifest is it moved to its final path. The `Models` directory is
+marked `isExcludedFromBackup`, progress is reported as an `AsyncThrowingStream` of `ProvisioningProgress`
+(bytes done / total), and every failure is a `ProvisioningError` — `integrityFailed(component:)`,
+`insufficientStorage(required:available:)`, `transferFailed`, `resumeRejected`, `invalidComponentPath`,
+`fileSystemFailed` or `transferError`.
+
+Three things are injected, so tests drive the provisioner without a network or a real volume:
+
+| Dependency | Production | In tests |
+| --- | --- | --- |
+| `URLSession` | the app's session | a session whose `protocolClasses` hold a fake `URLProtocol` |
+| `StorageInspector` | `VolumeStorageInspector` (`volumeAvailableCapacityForImportantUsage`) | a fake reporting a chosen free-space figure |
+| models directory | `Application Support/Models` | a temporary directory |
+
+`ModelProvisioner.live(manifest:session:)` is the production wiring. Before any request is sent the
+provisioner checks free space for the bytes still to download and fails
+`insufficientStorage(required:available:)` when there is not enough room.
 
 ## Running the tests
 

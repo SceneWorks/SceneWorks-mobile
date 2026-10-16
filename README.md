@@ -18,6 +18,26 @@ The SceneWorks iOS app: the SwiftUI shell of SceneWorks' on-device image generat
 Signing is ad hoc (`CODE_SIGN_IDENTITY = -`, no team): the project builds and tests on the simulator without an Apple
 account. Device builds need a team set locally.
 
+## Choosing the fake engine
+
+The app's one composition point, `SceneWorksMobileApp`, reads the `SCENEWORKS_FAKE_ENGINE` launch environment variable
+and picks how `FakeGenerationEngine` behaves:
+
+| Value | Behavior |
+| --- | --- |
+| unset or anything else | `standard`: 4 steps, 1 second apart |
+| `slow` | `slow`: 4 steps, 5 seconds apart — a run stays in progress long enough to tap Cancel |
+| `fail` | `fail`: 4 steps, 200 ms apart, throwing at step 2 — the run fails with a readable message and Retry |
+
+Set it in the scheme's Run > Arguments > Environment Variables for a manual run, or from the test target:
+
+```swift
+app.launchEnvironment["SCENEWORKS_FAKE_ENGINE"] = "slow"
+app.launch()
+```
+
+The UI tests use `slow` for the cancel case and `fail` for the error/Retry case.
+
 ## Running the tests
 
 Xcode 26 with the iOS Simulator runtime. Pick any iPhone simulator (`xcrun simctl list devices available`):

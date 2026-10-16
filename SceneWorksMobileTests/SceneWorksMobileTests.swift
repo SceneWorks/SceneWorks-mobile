@@ -6,16 +6,28 @@ struct SceneWorksMobileTests {
         let request = GenerationRequest(prompt: "A bright mountain", seed: 42)
         let events = try await events(from: FakeGenerationEngine(stepCount: 4, stepDelay: .zero), request: request)
 
-        let progress = events.compactMap { event -> String? in
-            guard case let .progress(step, total) = event else { return nil }
-            return "\(step)/\(total)"
+        // The whole sequence: every progress event in order, then the finished image last.
+        #expect(events.count == 5)
+        for (index, event) in events.enumerated() {
+            if index < 4 {
+                guard case let .progress(step, total) = event else {
+                    Issue.record("Expected progress \(index + 1)/4 at index \(index), got \(event)")
+                    continue
+                }
+                #expect(step == index + 1)
+                #expect(total == 4)
+            } else {
+                guard case .finished = event else {
+                    Issue.record("Expected the finished event last, got \(event)")
+                    continue
+                }
+            }
         }
-        #expect(progress == ["1/4", "2/4", "3/4", "4/4"])
 
-        let image = try #require(events.compactMap { event -> GeneratedImage? in
+        let image = try #require(events.last.flatMap { event -> GeneratedImage? in
             guard case let .finished(image) = event else { return nil }
             return image
-        }.first)
+        })
         #expect(image.width == 1_024)
         #expect(image.height == 1_024)
 

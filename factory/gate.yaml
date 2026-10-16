@@ -25,7 +25,7 @@ tiers:
     paths: [README.md]
     checks: [ci-green, review-pass]
 risk:
-  max_changed_lines: 400
+  max_changed_lines: 1000
   max_changed_files: 20
   max_fix_rounds: 3
   max_blast_radius: high

@@ -9,12 +9,15 @@ final class GenerateViewModel {
         case idle
         case generating
         case finished
+        case failed
     }
 
     var prompt = ""
     private(set) var state: State = .idle
     private(set) var progress = 0.0
     private(set) var image: UIImage?
+    /// A user-readable description of the last failure, present only while `state` is `.failed`.
+    private(set) var errorMessage: String?
 
     var canGenerate: Bool {
         !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && state != .generating
@@ -29,10 +32,20 @@ final class GenerateViewModel {
 
     func generate() {
         guard canGenerate else { return }
+        startGeneration()
+    }
 
+    /// Runs the generation again after a failure.
+    func retry() {
+        guard state == .failed, canGenerate else { return }
+        startGeneration()
+    }
+
+    private func startGeneration() {
         state = .generating
         progress = 0
         image = nil
+        errorMessage = nil
 
         let request = GenerationRequest(prompt: prompt, seed: 0)
         let engine = engine
@@ -54,9 +67,11 @@ final class GenerateViewModel {
                 guard !Task.isCancelled else { return }
                 self?.state = .idle
             } catch is CancellationError {
-                // Cancellation is surfaced by the engine; a later story presents its UI state.
+                // cancelGeneration() has already put the view model back to idle.
             } catch {
-                self?.state = .idle
+                guard !Task.isCancelled else { return }
+                self?.state = .failed
+                self?.errorMessage = error.localizedDescription
             }
         }
     }
@@ -66,6 +81,7 @@ final class GenerateViewModel {
         generationTask = nil
         if state == .generating {
             state = .idle
+            progress = 0
         }
     }
 }

@@ -5,7 +5,7 @@ import SwiftUI
 struct SceneWorksMobileApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            GenerateView(engine: FakeGenerationEngine())
         }
     }
 }

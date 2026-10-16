@@ -13,20 +13,30 @@ struct VolumeStorageInspector: StorageInspector {
 
     /// The volume the app's Application Support directory lives on.
     static func applicationSupportVolume() throws -> VolumeStorageInspector {
-        let support = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        return VolumeStorageInspector(volume: support)
+        do {
+            let support = try FileManager.default.url(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )
+            return VolumeStorageInspector(volume: support)
+        } catch {
+            throw ProvisioningError.fileSystemFailed((error as NSError).localizedDescription)
+        }
     }
 
     func availableCapacity() async throws -> Int64 {
-        let values = try volume.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        guard let capacity = values.volumeAvailableCapacityForImportantUsage else {
-            throw ProvisioningError.fileSystemFailed("No free-space figure for \(volume.path).")
+        do {
+            let values = try volume.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+            guard let capacity = values.volumeAvailableCapacityForImportantUsage else {
+                throw ProvisioningError.fileSystemFailed("No free-space figure for \(volume.path).")
+            }
+            return capacity
+        } catch let error as ProvisioningError {
+            throw error
+        } catch {
+            throw ProvisioningError.fileSystemFailed((error as NSError).localizedDescription)
         }
-        return capacity
     }
 }

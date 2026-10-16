@@ -15,6 +15,8 @@ enum ProvisioningError: Error, Equatable, LocalizedError {
     case invalidComponentPath(path: String)
     /// A file operation failed.
     case fileSystemFailed(String)
+    /// The transfer itself failed: the connection dropped, or the session gave up.
+    case transferError(component: String, detail: String)
 
     var errorDescription: String? {
         switch self {
@@ -30,6 +32,8 @@ enum ProvisioningError: Error, Equatable, LocalizedError {
             return "The manifest component path \(path) is outside the models directory."
         case let .fileSystemFailed(detail):
             return "The models directory could not be prepared: \(detail)"
+        case let .transferError(component, detail):
+            return "Downloading \(component) failed: \(detail)"
         }
     }
 }
@@ -90,13 +94,17 @@ actor ModelProvisioner {
 
     /// `Application Support/Models` — never Documents, so the models are not user-visible.
     static func applicationSupportModelsDirectory() throws -> URL {
-        let support = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        return support.appendingPathComponent("Models", isDirectory: true)
+        do {
+            let support = try FileManager.default.url(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )
+            return support.appendingPathComponent("Models", isDirectory: true)
+        } catch {
+            throw ProvisioningError.fileSystemFailed((error as NSError).localizedDescription)
+        }
     }
 
     /// The directory this release's components live in: `<models>/<version>`.
@@ -137,23 +145,37 @@ actor ModelProvisioner {
         // What is already here, and what is still missing.
         for component in manifest.components {
             try Task.checkCancellation()
-            let destination = try destinationURL(for: component)
-            if let verified = try verifiedSize(of: component, at: destination) {
-                // Already present and verified: never downloaded again.
-                completed += verified
-                continuation.yield(ProvisioningProgress(completedBytes: completed, totalBytes: total))
-            } else {
-                pending.append(component)
+            do {
+                let destination = try destinationURL(for: component)
+                if let verified = try verifiedSize(of: component, at: destination) {
+                    // Already present and verified: never downloaded again.
+                    completed += verified
+                    continuation.yield(ProvisioningProgress(completedBytes: completed, totalBytes: total))
+                } else {
+                    pending.append(component)
+                }
+            } catch {
+                throw typed(error)
             }
         }
 
         // Before any request: is there room for everything still to download?
-        let required = try pending.reduce(Int64(0)) { sum, component in
-            let partial = partialURL(for: try destinationURL(for: component))
-            return sum + max(0, Int64(component.size) - sizeIfPresent(at: partial))
+        let required: Int64
+        do {
+            required = try pending.reduce(Int64(0)) { sum, component in
+                let partial = partialURL(for: try destinationURL(for: component))
+                return sum + max(0, Int64(component.size) - sizeIfPresent(at: partial))
+            }
+        } catch {
+            throw typed(error)
         }
         if required > 0 {
-            let available = try await storage.availableCapacity()
+            let available: Int64
+            do {
+                available = try await storage.availableCapacity()
+            } catch {
+                throw typed(error)
+            }
             guard available >= required else {
                 throw ProvisioningError.insufficientStorage(required: required, available: available)
             }
@@ -161,14 +183,37 @@ actor ModelProvisioner {
 
         for component in pending {
             try Task.checkCancellation()
-            completed += try await download(
-                component,
-                to: try destinationURL(for: component),
-                alreadyComplete: completed,
-                totalBytes: total,
-                reportingTo: continuation
-            )
+            do {
+                completed += try await download(
+                    component,
+                    to: try destinationURL(for: component),
+                    alreadyComplete: completed,
+                    totalBytes: total,
+                    reportingTo: continuation
+                )
+            } catch {
+                throw typedTransfer(error, component: component)
+            }
         }
+    }
+
+    // MARK: - Typed failures
+
+    /// Wraps an underlying error in `ProvisioningError`, so nothing escapes the provisioning
+    /// error type. Cancellation keeps its own identity (E6).
+    private func typed(_ error: Error) -> Error {
+        if error is CancellationError || error is ProvisioningError { return error }
+        return ProvisioningError.fileSystemFailed(describe(error))
+    }
+
+    /// The same, for a failure of the transfer itself rather than of the file system.
+    private func typedTransfer(_ error: Error, component: ModelManifest.Component) -> Error {
+        if error is CancellationError || error is ProvisioningError { return error }
+        return ProvisioningError.transferError(component: component.name, detail: describe(error))
+    }
+
+    private func describe(_ error: Error) -> String {
+        (error as NSError).localizedDescription
     }
 
     // MARK: - Directories
@@ -180,7 +225,7 @@ actor ModelProvisioner {
             try fileManager.createDirectory(at: versionDirectory, withIntermediateDirectories: true)
             try modelsDirectory.excludeFromBackup()
         } catch {
-            throw ProvisioningError.fileSystemFailed(error.localizedDescription)
+            throw typed(error)
         }
     }
 
@@ -249,14 +294,18 @@ actor ModelProvisioner {
         reportingTo continuation: AsyncThrowingStream<ProvisioningProgress, Error>.Continuation
     ) async throws -> Int64 {
         let partial = partialURL(for: destination)
-        if sizeIfPresent(at: partial) > Int64(component.size) {
-            // A partial left over from another release: start over.
-            try? fileManager.removeItem(at: partial)
-        }
-        try fileManager.createDirectory(at: partial.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if !fileManager.fileExists(atPath: partial.path),
-           !fileManager.createFile(atPath: partial.path, contents: nil) {
-            throw ProvisioningError.fileSystemFailed("Could not create \(partial.path).")
+        do {
+            if sizeIfPresent(at: partial) > Int64(component.size) {
+                // A partial left over from another release: start over.
+                try? fileManager.removeItem(at: partial)
+            }
+            try fileManager.createDirectory(at: partial.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if !fileManager.fileExists(atPath: partial.path),
+               !fileManager.createFile(atPath: partial.path, contents: nil) {
+                throw ProvisioningError.fileSystemFailed("Could not create \(partial.path).")
+            }
+        } catch {
+            throw typed(error)
         }
 
         // Keep asking for the rest until the file is the size the manifest promises.
@@ -280,25 +329,38 @@ actor ModelProvisioner {
             } catch {
                 // The connection dropped. Keep what landed and resume from it, but only
                 // while this attempt actually moved the file forward.
-                if sizeIfPresent(at: partial) <= before { throw error }
+                if sizeIfPresent(at: partial) <= before { throw typedTransfer(error, component: component) }
             }
         }
 
-        let size = try fileSize(at: partial)
-        guard size == component.size, try sha256(ofFileAt: partial) == component.sha256.lowercased() else {
+        let size: Int64
+        let digest: String
+        do {
+            size = try fileSize(at: partial)
+            digest = try sha256(ofFileAt: partial)
+        } catch {
+            throw typed(error)
+        }
+        guard size == component.size, digest == component.sha256.lowercased() else {
             // An untrustworthy partial must not survive to poison the next attempt.
             try? fileManager.removeItem(at: partial)
             throw ProvisioningError.integrityFailed(component: component.name)
         }
 
         // Only a fully verified component is moved into place (E7).
-        if fileManager.fileExists(atPath: destination.path) {
-            try fileManager.removeItem(at: destination)
+        do {
+            if fileManager.fileExists(atPath: destination.path) {
+                try fileManager.removeItem(at: destination)
+            }
+            try fileManager.moveItem(at: partial, to: destination)
+        } catch {
+            throw typed(error)
         }
-        try fileManager.moveItem(at: partial, to: destination)
         return size
     }
 
+    /// One attempt at the transfer. A transport failure is left as it is: `download` decides
+    /// whether it is a drop to resume from or a terminal failure to report as a typed error.
     private func transferBody(
         _ component: ModelManifest.Component,
         to partial: URL,

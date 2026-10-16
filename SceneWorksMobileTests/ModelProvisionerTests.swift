@@ -96,8 +96,17 @@ private final class FakeModelProtocol: URLProtocol {
         let response = HTTPURLResponse(url: url, statusCode: answer.status, httpVersion: "HTTP/1.1", headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: answer.body)
-        // A cut-off ends the body early, short of what was promised.
-        client?.urlProtocolDidFinishLoading(self)
+        if answer.dropAfterBody {
+            // The connection dies mid-body: the bytes sent so far reach the consumer, the
+            // promised length never does. Reported on the next turn, as a real drop is.
+            let client = self.client
+            let protocolInstance = self
+            DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(50)) {
+                client?.urlProtocol(protocolInstance, didFailWithError: URLError(.networkConnectionLost))
+            }
+        } else {
+            client?.urlProtocolDidFinishLoading(self)
+        }
     }
 }
 

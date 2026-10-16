@@ -45,13 +45,54 @@ struct SceneWorksMobileTests {
         viewModel.generate()
         #expect(viewModel.state == .generating)
 
-        for _ in 0..<100 where viewModel.state != .finished {
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        try await wait(until: { viewModel.state == .finished })
 
         #expect(viewModel.state == .finished)
         #expect(viewModel.progress == 1)
         #expect(viewModel.image != nil)
+    }
+
+    @Test @MainActor func cancellingGenerationReachesFakeAndAllowsAnotherGeneration() async throws {
+        let observations = FakeGenerationObservations()
+        let viewModel = GenerateViewModel(engine: FakeGenerationEngine(
+            stepCount: 4,
+            stepDelay: .milliseconds(100),
+            observations: observations
+        ))
+        viewModel.prompt = "A sunny beach"
+        viewModel.generate()
+
+        try await wait(until: { viewModel.progress > 0 })
+        viewModel.cancelGeneration()
+        try await wait(until: { observations.didObserveCancellation })
+
+        let progressAtCancellation = observations.progressCount
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(observations.progressCount == progressAtCancellation)
+        #expect(viewModel.state == .idle)
+        #expect(viewModel.image == nil)
+
+        viewModel.generate()
+        try await wait(until: { viewModel.state == .finished })
+        #expect(viewModel.image != nil)
+    }
+
+    @Test @MainActor func failedGenerationShowsMessageAndRetryRunsAgain() async throws {
+        let viewModel = GenerateViewModel(engine: FakeGenerationEngine(
+            stepCount: 4,
+            stepDelay: .milliseconds(100),
+            failAtStep: 2
+        ))
+        viewModel.prompt = "A stormy sea"
+        viewModel.generate()
+
+        try await wait(until: { viewModel.state == .failed })
+        #expect(viewModel.errorMessage == "Generation failed at step 2.")
+
+        viewModel.retry()
+        #expect(viewModel.state == .generating)
+        #expect(viewModel.errorMessage == nil)
+        try await wait(until: { viewModel.state == .failed })
     }
 
     @Test @MainActor func whitespacePromptCannotStartGeneration() {
@@ -83,5 +124,13 @@ struct SceneWorksMobileTests {
             guard case let .finished(image) = event else { return nil }
             return image
         }.first)
+    }
+
+    @MainActor
+    private func wait(until condition: @escaping @MainActor () -> Bool) async throws {
+        for _ in 0..<300 where !condition() {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(condition())
     }
 }

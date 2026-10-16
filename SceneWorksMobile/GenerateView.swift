@@ -18,18 +18,41 @@ struct GenerateView: View {
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier("promptField")
 
-            Button("Generate") {
-                viewModel.generate()
+            if viewModel.state == .failed {
+                Button("Retry") {
+                    viewModel.retry()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!viewModel.canGenerate)
+                .accessibilityIdentifier("retryGenerateButton")
+            } else {
+                Button("Generate") {
+                    viewModel.generate()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!viewModel.canGenerate)
+                .accessibilityIdentifier("generateButton")
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(!viewModel.canGenerate)
-            .accessibilityIdentifier("generateButton")
 
             if viewModel.state == .generating {
+                Button("Cancel") {
+                    viewModel.cancelGeneration()
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("cancelButton")
+
                 ProgressView(value: viewModel.progress)
                     .accessibilityLabel("Generation progress")
                     .accessibilityValue("\(Int(viewModel.progress * 100))%")
                     .accessibilityIdentifier("generationProgress")
+            }
+
+            if let errorMessage = viewModel.errorMessage {
+                Text(errorMessage)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("errorMessage")
             }
 
             if let image = viewModel.image {
@@ -48,4 +71,3 @@ struct GenerateView: View {
         }
     }
 }
-

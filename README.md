@@ -9,7 +9,7 @@ The SceneWorks iOS app: the SwiftUI shell of SceneWorks' on-device image generat
 | Path | What |
 | --- | --- |
 | `SceneWorksMobile.xcodeproj` | The Xcode project (synchronized folders: a new file in a target's folder is part of that target, no project edit needed) and its one shared scheme, `SceneWorksMobile` |
-| `SceneWorksMobile/` | The app target (`com.sceneworks.mobile`, iOS 18.0+, iPhone): `SceneWorksMobileApp`, `ContentView`, `Generation/GenerationEngine.swift` |
+| `SceneWorksMobile/` | The app target (`com.sceneworks.mobile`, iOS 18.0+, iPhone): `SceneWorksMobileApp` (root: `GenerateView` wired with `FakeGenerationEngine`), `GenerateView`, `GenerateViewModel`, `Generation/GenerationEngine.swift` (`GenerationEngine` protocol, `GenerationRequest`/`GenerationEvent`, and the fake engine), `ContentView` (placeholder) |
 | `SceneWorksMobileTests/` | Unit tests (Swift Testing and XCTest), hosted in the app (`@testable import SceneWorksMobile`) |
 | `SceneWorksMobileUITests/` | UI tests (XCUITest) |
 | `factory/gate.yaml`, `CODEOWNERS` | The Dark Factory merge gate's policy and the owners of its sealed paths |

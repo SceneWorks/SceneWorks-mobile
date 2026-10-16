@@ -6,9 +6,20 @@ final class SceneWorksMobileUITests: XCTestCase {
     }
 
     @MainActor
-    func testLaunchShowsTitle() {
+    func testGenerateShowsProgressThenResult() {
         let app = XCUIApplication()
         app.launch()
-        XCTAssertTrue(app.staticTexts["title"].waitForExistence(timeout: 30))
+
+        let promptField = app.textFields["promptField"]
+        XCTAssertTrue(promptField.waitForExistence(timeout: 30))
+        promptField.tap()
+        promptField.typeText("A field of wildflowers")
+
+        let generateButton = app.buttons["generateButton"]
+        XCTAssertTrue(generateButton.isEnabled)
+        generateButton.tap()
+
+        XCTAssertTrue(app.progressIndicators["generationProgress"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.images["resultImage"].waitForExistence(timeout: 30))
     }
 }

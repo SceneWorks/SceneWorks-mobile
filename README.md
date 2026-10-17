@@ -9,7 +9,7 @@ The SceneWorks iOS app: the SwiftUI shell of SceneWorks' on-device image generat
 | Path | What |
 | --- | --- |
 | `SceneWorksMobile.xcodeproj` | The Xcode project (synchronized folders: a new file in a target's folder is part of that target, no project edit needed) and its one shared scheme, `SceneWorksMobile` |
-| `SceneWorksMobile/` | The app target (`com.sceneworks.mobile`, iOS 18.0+, iPhone): `SceneWorksMobileApp` (root: `GenerateView` wired with `FakeGenerationEngine`), `GenerateView`, `GenerateViewModel`, `Generation/GenerationEngine.swift` (`GenerationEngine` protocol, `GenerationRequest`/`GenerationEvent`, and the fake engine), `Provisioning/` (model provisioning, see below), `ContentView` (placeholder) |
+| `SceneWorksMobile/` | The app target (`com.sceneworks.mobile`, iOS 18.0+, iPhone): `SceneWorksMobileApp` (composition point, reads the launch environment), `AppRootView` in `ContentView.swift` (the root: asks the provisioner whether the models are ready — `GenerateView` when they are, `ProvisioningView` when they are not), `GenerateView`, `GenerateViewModel`, `Generation/GenerationEngine.swift` (`GenerationEngine` protocol, `GenerationRequest`/`GenerationEvent`, and the fake engine), `Provisioning/` (model provisioning and the first-run screen, see below) |
 | `SceneWorksMobileTests/` | Unit tests (Swift Testing and XCTest), hosted in the app (`@testable import SceneWorksMobile`): `SceneWorksMobileTests` (engine and view model) and `ModelProvisionerTests` (provisioning over a fake `URLProtocol`, a fake `StorageInspector` and a temp directory) |
 | `SceneWorksMobileUITests/` | UI tests (XCUITest) |
 | `factory/gate.yaml`, `CODEOWNERS` | The Dark Factory merge gate's policy and the owners of its sealed paths |
@@ -38,16 +38,36 @@ app.launch()
 
 The UI tests use `slow` for the cancel case and `fail` for the error/Retry case.
 
+## Choosing the fake model source
+
+The same composition point reads two more launch environment variables, picked from the test target
+the same way (`app.launchEnvironment[…]`). Together they drive the first-run provisioning screen:
+
+| Variable | Values | Behavior |
+| --- | --- | --- |
+| `SCENEWORKS_FAKE_DOWNLOADS` | unset · `ok` · `fail` · `nospace` | How the fake model source answers. Unset or `ok` serves every component successfully. `fail` answers the first request 500 (so a Download fails and Retry is offered) and succeeds on subsequent requests, so Retry completes. `nospace` makes the storage inspector report no room, so the precheck fails before any request and the screen shows the required/available space with no Download. |
+| `SCENEWORKS_RESET_MODELS` | `1` · unset | When `1`, the provisioned models are deleted at launch, so the app starts from "not ready" and shows the provisioning screen instead of finding the release already on disk. |
+
+A fresh launch (no models) shows the provisioning screen; tapping Download runs the provisioner, and
+once the release is on disk a relaunch without `SCENEWORKS_RESET_MODELS` goes straight to the
+generate screen.
+
 ## Model provisioning
 
-`SceneWorksMobile/Provisioning/` is the logic half of model delivery: no UI, just the manifest, the
-transfer and the verification.
+`SceneWorksMobile/Provisioning/` is model delivery end to end: the manifest, the transfer, the
+verification, and the first-run screen that surfaces it as onboarding. The app root
+(`AppRootView`) asks the provisioner whether the release is already on disk and verified; when it
+is, the generate screen shows, and when it is not, the `ProvisioningView` does. The view model
+drives a `ModelProvisioner` run and reports its byte progress as one overall determinate fraction.
 
 | File | What |
 | --- | --- |
 | `ModelManifest.swift` | `ModelManifest` (Codable): a `version` plus `components`, each with `name`, a relative `path`, a `url`, a `size` in bytes and a `sha256` hex digest |
 | `ModelProvisioner.swift` | The `ModelProvisioner` actor, `ProvisioningProgress` and the typed `ProvisioningError` |
 | `StorageInspector.swift` | The `StorageInspector` protocol and `VolumeStorageInspector`, the production inspector |
+| `ProvisioningViewModel.swift` | The `@MainActor` `ProvisioningViewModel` that drives a `ModelProvisioner` run and reduces byte progress to one overall fraction |
+| `ProvisioningView.swift` | The first-run onboarding screen: the components with their sizes, overall determinate progress, a Download / Retry control, and the required/available space when there is not enough |
+| `FakeModelSource.swift` | The model source while there is no real hosting: a bundled manifest of small synthetic components, served in-process by a `URLProtocol` on the provisioner's session — the seam real hosting replaces |
 
 A run of `provision()` writes each component that is not already present and verified into
 `Application Support/Models/<version>/`. Bytes land in a `.partial` file first; an interrupted

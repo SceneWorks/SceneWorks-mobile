@@ -1,15 +1,34 @@
+import Foundation
 import SwiftUI
 
-/// Placeholder root view. The prompt → generate → progress → cancel → result flow replaces it.
-struct ContentView: View {
-    var body: some View {
-        Text("SceneWorks")
-            .font(.largeTitle)
-            .accessibilityIdentifier("title")
-            .padding()
-    }
-}
+/// The app's root: it asks the provisioner whether the models are already
+/// present and verified, and shows the generate screen when they are — or the
+/// first-run provisioning screen when they are not.
+struct AppRootView: View {
+    @State private var viewModel: ProvisioningViewModel
+    private let engine: any GenerationEngine
 
-#Preview {
-    ContentView()
+    init(engine: any GenerationEngine, provisioner: ModelProvisioner, manifest: ModelManifest, storage: any StorageInspector) {
+        self.engine = engine
+        _viewModel = State(initialValue: ProvisioningViewModel(provisioner: provisioner, manifest: manifest, storage: storage))
+    }
+
+    var body: some View {
+        Group {
+            if viewModel.state == .ready {
+                GenerateView(engine: engine)
+            } else {
+                ProvisioningView(viewModel: viewModel)
+            }
+        }
+        .task {
+            // The app root asking whether the models are ready and whether there
+            // is room for them. A ready release skips the screen entirely.
+            if await viewModel.isReady() {
+                viewModel.state = .ready
+                return
+            }
+            await viewModel.checkStorage()
+        }
+    }
 }

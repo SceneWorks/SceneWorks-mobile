@@ -112,6 +112,21 @@ actor ModelProvisioner {
         modelsDirectory.appendingPathComponent(manifest.version, isDirectory: true)
     }
 
+    /// Whether every component of this release is on disk and verified (size and
+    /// SHA-256), so no download is needed. Owned here, where the verification
+    /// logic lives, so the "ready" determination cannot drift from what
+    /// `provision()` considers usable. A manifest pointing outside the models
+    /// directory is not a verified release.
+    func isReleaseVerified() -> Bool {
+        let directory = versionDirectory
+        guard fileManager.fileExists(atPath: directory.path) else { return false }
+        for component in manifest.components {
+            guard let destination = try? destinationURL(for: component),
+                  (try? verifiedSize(of: component, at: destination)) != nil else { return false }
+        }
+        return true
+    }
+
     /// Brings every component of the manifest onto disk, verified.
     ///
     /// Yields progress as bytes land and finishes when the release is complete.
@@ -309,15 +324,8 @@ actor ModelProvisioner {
         }
 
         // Keep asking for the rest until the file is the size the manifest promises.
-        // A safety cap prevents a misbehaving transfer from looping forever.
-        let maxAttempts = 100
-        var attempt = 0
         while sizeIfPresent(at: partial) < Int64(component.size) {
             try Task.checkCancellation()
-            if attempt >= maxAttempts {
-                throw ProvisioningError.transferError(component: component.name, detail: "Transfer stalled after \(maxAttempts) attempts.")
-            }
-            attempt += 1
             let before = sizeIfPresent(at: partial)
             do {
                 try await transferBody(

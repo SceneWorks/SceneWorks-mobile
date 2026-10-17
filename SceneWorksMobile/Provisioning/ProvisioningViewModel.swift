@@ -58,16 +58,10 @@ final class ProvisioningViewModel {
     }
 
     /// The whole release is on disk and verified; no download needed. The
-    /// version directory is only created by a provisioning run, so its presence
-    /// plus every component file is the "ready" signal.
+    /// determination is made by the provisioner, which owns the size and
+    /// SHA-256 checks, so "ready" means usable — not merely present.
     func isReady() async -> Bool {
-        let directory = await provisioner.versionDirectory
-        guard FileManager.default.fileExists(atPath: directory.path) else { return false }
-        for component in manifest.components {
-            let destination = directory.appendingPathComponent(component.path)
-            guard FileManager.default.fileExists(atPath: destination.path) else { return false }
-        }
-        return true
+        await provisioner.isReleaseVerified()
     }
 
     /// Asks the storage inspector whether there is room for the whole release.

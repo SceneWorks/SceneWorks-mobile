@@ -81,6 +81,8 @@ struct ProvisioningView: View {
             Spacer()
         }
         .padding()
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("provisioningView")
         .onDisappear {
             viewModel.cancel()
         }

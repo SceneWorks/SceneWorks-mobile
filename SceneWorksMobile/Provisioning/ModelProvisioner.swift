@@ -309,8 +309,15 @@ actor ModelProvisioner {
         }
 
         // Keep asking for the rest until the file is the size the manifest promises.
+        // A safety cap prevents a misbehaving transfer from looping forever.
+        let maxAttempts = 100
+        var attempt = 0
         while sizeIfPresent(at: partial) < Int64(component.size) {
             try Task.checkCancellation()
+            if attempt >= maxAttempts {
+                throw ProvisioningError.transferError(component: component.name, detail: "Transfer stalled after \(maxAttempts) attempts.")
+            }
+            attempt += 1
             let before = sizeIfPresent(at: partial)
             do {
                 try await transferBody(

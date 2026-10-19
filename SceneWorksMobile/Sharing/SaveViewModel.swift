@@ -22,8 +22,12 @@ enum SaveMessage: Equatable {
 @MainActor
 @Observable
 final class SaveViewModel {
-    /// A marker for each distinct generated result.
-    struct ResultToken: Hashable, Sendable {}
+    /// A marker for each distinct generated result. It carries a unique
+    /// identity so two results are never equated — a stale completion is
+    /// matched against the result it belongs to, and nothing else.
+    struct ResultToken: Hashable, Sendable {
+        private let identity = UUID()
+    }
 
     private(set) var message: SaveMessage?
     /// The result the current `message` belongs to, so a stale completion is

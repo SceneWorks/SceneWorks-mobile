@@ -104,6 +104,27 @@ private final class RecordingSaver: PhotoLibrarySaving, @unchecked Sendable {
     }
 }
 
+/// A saver whose `save` returns (or throws) after a configurable delay, so a
+/// test can hold one save in flight while starting another on the same view
+/// model.
+private final class DelayedSaver: PhotoLibrarySaving, @unchecked Sendable {
+    private let outcome: SaveResult
+    private let failure: Error?
+    private let delay: Double
+
+    init(outcome: SaveResult, failure: Error? = nil, delay: Double) {
+        self.outcome = outcome
+        self.failure = failure
+        self.delay = delay
+    }
+
+    func save(png: Data) async throws -> SaveResult {
+        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        if let failure { throw failure }
+        return outcome
+    }
+}
+
 @MainActor
 struct PhotoSavingTests {
     @Test func authorizedSavesAndShowsConfirmation() async throws {
@@ -152,6 +173,68 @@ struct PhotoSavingTests {
             return
         }
         #expect(!detail.isEmpty)
+    }
+
+    @Test func resultTokensAreDistinct() {
+        let a = SaveViewModel.ResultToken()
+        let b = SaveViewModel.ResultToken()
+        #expect(a != b)
+    }
+
+    @Test func staleCompletionFromAPriorResultNeverOverwritesANewerOne() async throws {
+        let image = try await fakeImage(seed: 10)
+
+        let tokenA = SaveViewModel.ResultToken()
+        let tokenB = SaveViewModel.ResultToken()
+
+        // VM A: holds a slow save that is still in flight.
+        let vmA = SaveViewModel(saver: DelayedSaver(outcome: .saved, delay: 3.0))
+        let taskA = Task { await vmA.save(image: image, seed: 10, result: tokenA) }
+        // Let A reach the saver's sleep.
+        await Task.yield()
+
+        // VM B: a fast save that completes immediately.
+        let vmB = SaveViewModel(saver: DelayedSaver(outcome: .saved, delay: 0.0))
+        await vmB.save(image: image, seed: 11, result: tokenB)
+        #expect(vmB.message(for: tokenB) == .saved)
+
+        // Now A's slow save finishes — well after B completed.
+        // Its stale completion must not affect B's view model.
+        await taskA.value
+        #expect(vmA.message(for: tokenA) == .saved)
+        #expect(vmB.message(for: tokenB) == .saved)
+        #expect(vmB.message(for: tokenA) == nil)
+    }
+
+    @Test func staleFailureFromAPriorResultNeverOverwritesANewerOne() async throws {
+        let image = try await fakeImage(seed: 20)
+
+        let tokenA = SaveViewModel.ResultToken()
+        let tokenB = SaveViewModel.ResultToken()
+
+        // VM A: a slow save that will throw.
+        let vmA = SaveViewModel(saver: DelayedSaver(
+            outcome: .saved,
+            failure: SaveError(message: "boom"),
+            delay: 3.0
+        ))
+        let taskA = Task { await vmA.save(image: image, seed: 20, result: tokenA) }
+        await Task.yield()
+
+        // VM B: a fast save that succeeds immediately.
+        let vmB = SaveViewModel(saver: DelayedSaver(outcome: .saved, delay: 0.0))
+        await vmB.save(image: image, seed: 21, result: tokenB)
+        #expect(vmB.message(for: tokenB) == .saved)
+
+        // A's failure completes after B succeeded.
+        await taskA.value
+        // B's confirmation is intact.
+        #expect(vmB.message(for: tokenB) == .saved)
+        #expect(vmB.message(for: tokenA) == nil)
+        // A's own view model shows the failure (its token still matches).
+        if case .saveFailed? = vmA.message(for: tokenA) {} else {
+            Issue.record("Expected .saveFailed on vmA, got \(String(describing: vmA.message(for: tokenA)))")
+        }
     }
 
     @Test func fakeAuthorizationReadsTheLaunchEnvironment() {

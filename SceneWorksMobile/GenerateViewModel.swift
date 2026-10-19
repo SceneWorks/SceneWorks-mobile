@@ -16,6 +16,10 @@ final class GenerateViewModel {
     private(set) var state: State = .idle
     private(set) var progress = 0.0
     private(set) var image: UIImage?
+    /// The raw generated image and its seed, present once a generation has
+    /// finished — the source for exporting, saving and sharing.
+    private(set) var generatedImage: GeneratedImage?
+    private(set) var seed: UInt64 = 0
     /// A user-readable description of the last failure, present only while `state` is `.failed`.
     private(set) var errorMessage: String?
 
@@ -45,6 +49,7 @@ final class GenerateViewModel {
         state = .generating
         progress = 0
         image = nil
+        generatedImage = nil
         errorMessage = nil
 
         let request = GenerationRequest(prompt: prompt, seed: 0)
@@ -58,7 +63,9 @@ final class GenerateViewModel {
                     case let .progress(step, total):
                         self?.progress = Double(step) / Double(total)
                     case let .finished(generatedImage):
-                        self?.image = generatedImage.uiImage()
+                        self?.image = ImageEncoder.uiImage(from: generatedImage)
+                        self?.generatedImage = generatedImage
+                        self?.seed = request.seed
                         self?.state = .finished
                         return
                     }
@@ -83,27 +90,5 @@ final class GenerateViewModel {
             state = .idle
             progress = 0
         }
-    }
-}
-
-private extension GeneratedImage {
-    func uiImage() -> UIImage {
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
-        let provider = CGDataProvider(data: pixels as CFData)!
-        let image = CGImage(
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bitsPerPixel: 32,
-            bytesPerRow: width * 4,
-            space: colorSpace,
-            bitmapInfo: CGBitmapInfo(rawValue: bitmapInfo),
-            provider: provider,
-            decode: nil,
-            shouldInterpolate: false,
-            intent: .defaultIntent
-        )!
-        return UIImage(cgImage: image)
     }
 }

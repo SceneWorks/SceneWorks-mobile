@@ -141,4 +141,52 @@ final class SceneWorksMobileUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["errorMessage"].label.isEmpty)
         XCTAssertTrue(app.buttons["retryGenerateButton"].exists)
     }
+
+    // MARK: - Save and share
+
+    @MainActor
+    func testAfterGenerationSaveAndShareAreVisible() {
+        let app = XCUIApplication()
+        app.launchEnvironment["SCENEWORKS_FAKE_PHOTOS"] = "authorized"
+        app.launchEnvironment["SCENEWORKS_RESET_MODELS"] = "1"
+        app.launch()
+
+        // Skip past provisioning to the generate screen.
+        app.buttons["downloadButton"].waitForExistence(timeout: 30)
+        app.buttons["downloadButton"].tap()
+        XCTAssertTrue(app.textFields["promptField"].waitForExistence(timeout: 30))
+
+        let promptField = app.textFields["promptField"]
+        promptField.tap()
+        promptField.typeText("A field of wildflowers")
+        app.buttons["generateButton"].tap()
+        XCTAssertTrue(app.images["resultImage"].waitForExistence(timeout: 30))
+
+        // Once the result is shown, Save and Share are available.
+        XCTAssertTrue(app.buttons["saveButton"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["shareButton"].exists)
+    }
+
+    @MainActor
+    func testAuthorizedSaveShowsConfirmation() {
+        let app = XCUIApplication()
+        app.launchEnvironment["SCENEWORKS_FAKE_PHOTOS"] = "authorized"
+        app.launchEnvironment["SCENEWORKS_RESET_MODELS"] = "1"
+        app.launch()
+
+        // Skip past provisioning to the generate screen.
+        app.buttons["downloadButton"].waitForExistence(timeout: 30)
+        app.buttons["downloadButton"].tap()
+        XCTAssertTrue(app.textFields["promptField"].waitForExistence(timeout: 30))
+
+        let promptField = app.textFields["promptField"]
+        promptField.tap()
+        promptField.typeText("A field of wildflowers")
+        app.buttons["generateButton"].tap()
+        XCTAssertTrue(app.images["resultImage"].waitForExistence(timeout: 30))
+
+        // Saving with authorized Photos access shows the confirmation.
+        app.buttons["saveButton"].tap()
+        XCTAssertTrue(app.staticTexts["saveConfirmation"].waitForExistence(timeout: 10))
+    }
 }

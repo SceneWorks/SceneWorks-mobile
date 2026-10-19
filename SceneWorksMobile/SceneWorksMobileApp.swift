@@ -7,12 +7,14 @@ import UIKit
 /// The SceneWorks mobile app: the SwiftUI shell of SceneWorks' on-device image generation.
 @main
 struct SceneWorksMobileApp: App {
-    /// The one composition point: the launch environment picks how the fake engine behaves and
-    /// how the fake model source behaves, and the root that shows. Read only here (E8).
+    /// The one composition point: the launch environment picks how the fake engine behaves,
+    /// how the fake model source behaves, how the fake photo library behaves, and the root that
+    /// shows. Read only here (E8).
     private var root: some View {
         let environment = ProcessInfo.processInfo.environment
         let downloads = environment["SCENEWORKS_FAKE_DOWNLOADS"]
         let resetModels = environment["SCENEWORKS_RESET_MODELS"] == "1"
+        let photos = environment["SCENEWORKS_FAKE_PHOTOS"]
 
         if resetModels {
             resetProvisionedModels()
@@ -29,7 +31,17 @@ struct SceneWorksMobileApp: App {
             modelsDirectory: modelsDirectory
         )
         let engine = FakeGenerationEngine(mode: fakeEngineMode)
-        return AppRootView(engine: engine, provisioner: provisioner, manifest: manifest, storage: storage)
+        let photoSaver: any PhotoLibrarySaving =
+            photos == "authorized" || photos == "denied" || photos == "restricted"
+                ? FakePhotoLibrarySaver(authorization: FakePhotoAuthorization(environment: environment))
+                : PHPhotoLibraryPhotoSaver()
+        return AppRootView(
+            engine: engine,
+            provisioner: provisioner,
+            manifest: manifest,
+            storage: storage,
+            photoSaver: photoSaver
+        )
     }
 
     var body: some Scene {

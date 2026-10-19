@@ -104,24 +104,41 @@ private final class RecordingSaver: PhotoLibrarySaving, @unchecked Sendable {
     }
 }
 
-/// A saver whose `save` returns (or throws) after a configurable delay, so a
-/// test can hold one save in flight while starting another on the same view
-/// model.
-private final class DelayedSaver: PhotoLibrarySaving, @unchecked Sendable {
-    private let outcome: SaveResult
-    private let failure: Error?
-    private let delay: Double
-
-    init(outcome: SaveResult, failure: Error? = nil, delay: Double) {
-        self.outcome = outcome
-        self.failure = failure
-        self.delay = delay
-    }
+/// Holds the first save until the test releases it, while completing the
+/// second one immediately. This deterministically orders stale completions.
+private actor ControllableSaver: PhotoLibrarySaving {
+    private var saveCount = 0
+    private var firstSaveStarted = false
+    private var firstSaveStartedContinuation: CheckedContinuation<Void, Never>?
+    private var firstSaveContinuation: CheckedContinuation<SaveResult, Error>?
 
     func save(png: Data) async throws -> SaveResult {
-        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-        if let failure { throw failure }
-        return outcome
+        saveCount += 1
+        guard saveCount == 1 else { return .saved }
+
+        firstSaveStarted = true
+        firstSaveStartedContinuation?.resume()
+        firstSaveStartedContinuation = nil
+        return try await withCheckedThrowingContinuation { continuation in
+            firstSaveContinuation = continuation
+        }
+    }
+
+    func waitForFirstSaveToStart() async {
+        guard !firstSaveStarted else { return }
+        await withCheckedContinuation { continuation in
+            firstSaveStartedContinuation = continuation
+        }
+    }
+
+    func finishFirstSave() {
+        firstSaveContinuation?.resume(returning: .saved)
+        firstSaveContinuation = nil
+    }
+
+    func failFirstSave() {
+        firstSaveContinuation?.resume(throwing: SaveError(message: "boom"))
+        firstSaveContinuation = nil
     }
 }
 
@@ -183,58 +200,42 @@ struct PhotoSavingTests {
 
     @Test func staleCompletionFromAPriorResultNeverOverwritesANewerOne() async throws {
         let image = try await fakeImage(seed: 10)
-
+        let saver = ControllableSaver()
+        let viewModel = SaveViewModel(saver: saver)
         let tokenA = SaveViewModel.ResultToken()
         let tokenB = SaveViewModel.ResultToken()
 
-        // VM A: holds a slow save that is still in flight.
-        let vmA = SaveViewModel(saver: DelayedSaver(outcome: .saved, delay: 3.0))
-        let taskA = Task { await vmA.save(image: image, seed: 10, result: tokenA) }
-        // Let A reach the saver's sleep.
-        await Task.yield()
+        let taskA = Task { await viewModel.save(image: image, seed: 10, result: tokenA) }
+        await saver.waitForFirstSaveToStart()
 
-        // VM B: a fast save that completes immediately.
-        let vmB = SaveViewModel(saver: DelayedSaver(outcome: .saved, delay: 0.0))
-        await vmB.save(image: image, seed: 11, result: tokenB)
-        #expect(vmB.message(for: tokenB) == .saved)
+        // The second save completes while the first is deliberately held.
+        await viewModel.save(image: image, seed: 11, result: tokenB)
+        #expect(viewModel.message(for: tokenB) == .saved)
 
-        // Now A's slow save finishes — well after B completed.
-        // Its stale completion must not affect B's view model.
+        await saver.finishFirstSave()
         await taskA.value
-        #expect(vmA.message(for: tokenA) == .saved)
-        #expect(vmB.message(for: tokenB) == .saved)
-        #expect(vmB.message(for: tokenA) == nil)
+        #expect(viewModel.message(for: tokenB) == .saved)
+        #expect(viewModel.message(for: tokenA) == nil)
     }
 
     @Test func staleFailureFromAPriorResultNeverOverwritesANewerOne() async throws {
         let image = try await fakeImage(seed: 20)
-
+        let saver = ControllableSaver()
+        let viewModel = SaveViewModel(saver: saver)
         let tokenA = SaveViewModel.ResultToken()
         let tokenB = SaveViewModel.ResultToken()
 
-        // VM A: a slow save that will throw.
-        let vmA = SaveViewModel(saver: DelayedSaver(
-            outcome: .saved,
-            failure: SaveError(message: "boom"),
-            delay: 3.0
-        ))
-        let taskA = Task { await vmA.save(image: image, seed: 20, result: tokenA) }
-        await Task.yield()
+        let taskA = Task { await viewModel.save(image: image, seed: 20, result: tokenA) }
+        await saver.waitForFirstSaveToStart()
 
-        // VM B: a fast save that succeeds immediately.
-        let vmB = SaveViewModel(saver: DelayedSaver(outcome: .saved, delay: 0.0))
-        await vmB.save(image: image, seed: 21, result: tokenB)
-        #expect(vmB.message(for: tokenB) == .saved)
+        // The second save succeeds before the first reports its error.
+        await viewModel.save(image: image, seed: 21, result: tokenB)
+        #expect(viewModel.message(for: tokenB) == .saved)
 
-        // A's failure completes after B succeeded.
+        await saver.failFirstSave()
         await taskA.value
-        // B's confirmation is intact.
-        #expect(vmB.message(for: tokenB) == .saved)
-        #expect(vmB.message(for: tokenA) == nil)
-        // A's own view model shows the failure (its token still matches).
-        if case .saveFailed? = vmA.message(for: tokenA) {} else {
-            Issue.record("Expected .saveFailed on vmA, got \(String(describing: vmA.message(for: tokenA)))")
-        }
+        #expect(viewModel.message(for: tokenB) == .saved)
+        #expect(viewModel.message(for: tokenA) == nil)
     }
 
     @Test func fakeAuthorizationReadsTheLaunchEnvironment() {

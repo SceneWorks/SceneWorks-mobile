@@ -15,10 +15,20 @@ enum SaveMessage: Equatable {
 /// has produced an image. It encodes the result to PNG, saves it to the photo
 /// library through a `PhotoLibrarySaving`, and reports the outcome so the
 /// screen shows either the confirmation or an actionable message.
+///
+/// Save state is keyed by the identity of the result being saved, so a save
+/// that finishes after a new generation has appeared never overwrites the
+/// confirmation of the newer result.
 @MainActor
 @Observable
 final class SaveViewModel {
+    /// A marker for each distinct generated result.
+    struct ResultToken: Hashable, Sendable {}
+
     private(set) var message: SaveMessage?
+    /// The result the current `message` belongs to, so a stale completion is
+    /// never shown against a different result.
+    private(set) var messageResult: ResultToken?
 
     private let exporter: ImageExporter
     private let saver: any PhotoLibrarySaving
@@ -28,11 +38,25 @@ final class SaveViewModel {
         self.saver = saver
     }
 
+    /// Clears any save outcome from a previous result. Called at the start of
+    /// each new generation so a stale confirmation never shows under the new
+    /// result.
+    func reset() {
+        message = nil
+        messageResult = nil
+    }
+
+    /// The outcome, if any, belonging to `result`.
+    func message(for result: ResultToken) -> SaveMessage? {
+        messageResult == result ? message : nil
+    }
+
     /// Encodes the result to PNG and adds it to the photo library. The PNG
     /// encoding and save run off the main actor; only the resulting message
     /// lands back here.
-    func save(image: GeneratedImage, seed: UInt64) async {
+    func save(image: GeneratedImage, seed: UInt64, result: ResultToken) async {
         message = nil
+        messageResult = result
         let exporter = self.exporter
         let saver = self.saver
         do {
@@ -40,14 +64,18 @@ final class SaveViewModel {
                 try exporter.pngData(image: image)
             }.value
 
-            let result = try await saver.save(png: png)
-            switch result {
+            let outcome = try await saver.save(png: png)
+            // The result may have been replaced while the save was in flight;
+            // publish the outcome only if it still refers to the current result.
+            guard messageResult == result else { return }
+            switch outcome {
             case .saved:
                 message = .saved
             case .denied, .restricted:
                 message = .photosAccessDenied
             }
         } catch {
+            guard messageResult == result else { return }
             message = .saveFailed(error.localizedDescription)
         }
     }

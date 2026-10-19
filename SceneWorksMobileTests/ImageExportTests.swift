@@ -111,7 +111,7 @@ struct PhotoSavingTests {
         let saver = RecordingSaver(result: .saved, failure: nil)
         let viewModel = SaveViewModel(saver: saver)
 
-        await viewModel.save(image: image, seed: 1)
+        await viewModel.save(image: image, seed: 1, result: SaveViewModel.ResultToken())
 
         #expect(viewModel.message == .saved)
         #expect(saver.calls == 1)
@@ -119,22 +119,24 @@ struct PhotoSavingTests {
 
     @Test func deniedShowsAccessDeniedMessageAndSavesNothing() async throws {
         let image = try await fakeImage(seed: 2)
-        let saver = RecordingSaver(result: .denied, failure: nil)
+        let saver = FakePhotoLibrarySaver(authorization: .denied)
         let viewModel = SaveViewModel(saver: saver)
 
-        await viewModel.save(image: image, seed: 2)
+        await viewModel.save(image: image, seed: 2, result: SaveViewModel.ResultToken())
 
         #expect(viewModel.message == .photosAccessDenied)
+        #expect(saver.saveCount == 0)
     }
 
     @Test func restrictedShowsAccessDeniedMessageAndSavesNothing() async throws {
         let image = try await fakeImage(seed: 3)
-        let saver = RecordingSaver(result: .restricted, failure: nil)
+        let saver = FakePhotoLibrarySaver(authorization: .restricted)
         let viewModel = SaveViewModel(saver: saver)
 
-        await viewModel.save(image: image, seed: 3)
+        await viewModel.save(image: image, seed: 3, result: SaveViewModel.ResultToken())
 
         #expect(viewModel.message == .photosAccessDenied)
+        #expect(saver.saveCount == 0)
     }
 
     @Test func aSaveThatThrowsShowsAnErrorMessage() async throws {
@@ -143,7 +145,7 @@ struct PhotoSavingTests {
         let saver = RecordingSaver(result: .saved, failure: boom)
         let viewModel = SaveViewModel(saver: saver)
 
-        await viewModel.save(image: image, seed: 4)
+        await viewModel.save(image: image, seed: 4, result: SaveViewModel.ResultToken())
 
         guard case let .saveFailed(detail)? = viewModel.message else {
             Issue.record("Expected .saveFailed, got \(String(describing: viewModel.message))")
@@ -164,13 +166,14 @@ struct PhotoSavingTests {
 
         let authorized = FakePhotoLibrarySaver(authorization: .authorized)
         let viewModel = SaveViewModel(saver: authorized)
-        await viewModel.save(image: image, seed: 5)
+        await viewModel.save(image: image, seed: 5, result: SaveViewModel.ResultToken())
         #expect(authorized.saveCount == 1)
         #expect(viewModel.message == .saved)
 
         let denied = FakePhotoLibrarySaver(authorization: .denied)
         let deniedVM = SaveViewModel(saver: denied)
-        await deniedVM.save(image: image, seed: 5)
+        await deniedVM.save(image: image, seed: 5, result: SaveViewModel.ResultToken())
         #expect(deniedVM.message == .photosAccessDenied)
+        #expect(denied.saveCount == 0)
     }
 }

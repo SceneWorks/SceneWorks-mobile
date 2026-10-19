@@ -45,9 +45,9 @@ final class FakePhotoLibrarySaver: PhotoLibrarySaving, @unchecked Sendable {
         if let failure {
             throw failure
         }
-        saveCount += 1
         switch authorization {
         case .authorized:
+            saveCount += 1
             return .saved
         case .denied:
             return .denied

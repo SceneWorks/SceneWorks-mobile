@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import SceneWorksMobile
 
@@ -45,7 +46,9 @@ struct SceneWorksMobileTests {
         viewModel.generate()
         #expect(viewModel.state == .generating)
 
-        try await wait(until: { viewModel.state == .finished })
+        try await wait(for: "the generation to finish") {
+            viewModel.state == .finished
+        }
 
         #expect(viewModel.state == .finished)
         #expect(viewModel.progress == 1)
@@ -53,27 +56,35 @@ struct SceneWorksMobileTests {
     }
 
     @Test @MainActor func cancellingGenerationReachesFakeAndAllowsAnotherGeneration() async throws {
-        let observations = FakeGenerationObservations()
-        let viewModel = GenerateViewModel(engine: FakeGenerationEngine(
-            stepCount: 4,
-            stepDelay: .milliseconds(100),
-            observations: observations
-        ))
+        let control = GenerationCancellationControl()
+        let viewModel = GenerateViewModel(engine: ControllableGenerationEngine(control: control))
         viewModel.prompt = "A sunny beach"
         viewModel.generate()
 
-        try await wait(until: { viewModel.progress > 0 })
-        viewModel.cancelGeneration()
-        try await wait(until: { observations.didObserveCancellation })
+        // The producer has emitted one event and is now blocked at a
+        // cancellation-aware suspension. It cannot finish before cancellation.
+        try await wait(for: "the first generation producer to suspend") {
+            await control.firstRunIsSuspended
+        }
+        try await wait(for: "the first generation progress update") {
+            viewModel.progress > 0
+        }
 
-        let progressAtCancellation = observations.progressCount
-        try await Task.sleep(for: .milliseconds(250))
-        #expect(observations.progressCount == progressAtCancellation)
+        viewModel.cancelGeneration()
+        try await wait(for: "the fake engine to observe cancellation") {
+            await control.didObserveCancellation
+        }
+
+        let firstRunProgressCount = await control.firstRunProgressCount
+        #expect(firstRunProgressCount == 1)
         #expect(viewModel.state == .idle)
+        #expect(viewModel.progress == 0)
         #expect(viewModel.image == nil)
 
         viewModel.generate()
-        try await wait(until: { viewModel.state == .finished })
+        try await wait(for: "the second generation to finish") {
+            viewModel.state == .finished
+        }
         #expect(viewModel.image != nil)
     }
 
@@ -86,13 +97,17 @@ struct SceneWorksMobileTests {
         viewModel.prompt = "A stormy sea"
         viewModel.generate()
 
-        try await wait(until: { viewModel.state == .failed })
+        try await wait(for: "the failed generation to report its failure") {
+            viewModel.state == .failed
+        }
         #expect(viewModel.errorMessage == "Generation failed at step 2.")
 
         viewModel.retry()
         #expect(viewModel.state == .generating)
         #expect(viewModel.errorMessage == nil)
-        try await wait(until: { viewModel.state == .failed })
+        try await wait(for: "the retried generation to report its failure") {
+            viewModel.state == .failed
+        }
     }
 
     @Test @MainActor func whitespacePromptCannotStartGeneration() {
@@ -126,11 +141,136 @@ struct SceneWorksMobileTests {
         }.first)
     }
 
+    /// Waits against a wall-clock deadline, so test-executor contention cannot
+    /// silently turn an iteration count into an unbounded wait. The unit target
+    /// runs its 1024-pixel image and PNG tests concurrently, so this completion
+    /// deadline allows a whole contended suite to make progress; it is not an
+    /// assertion that an individual fake generation should take this long.
+    /// `file` and `line` preserve which expectation actually timed out.
     @MainActor
-    private func wait(until condition: @escaping @MainActor () -> Bool) async throws {
-        for _ in 0..<300 where !condition() {
+    private func wait(
+        for description: String,
+        timeout: Duration = .seconds(15),
+        file: StaticString = #fileID,
+        line: UInt = #line,
+        until condition: @escaping @MainActor () async -> Bool
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+
+        while true {
+            guard clock.now < deadline else {
+                throw WaitTimeout(description: description, file: file, line: line)
+            }
+
+            let satisfied = await condition()
+            guard clock.now < deadline else {
+                throw WaitTimeout(description: description, file: file, line: line)
+            }
+            if satisfied { return }
+
             try await Task.sleep(for: .milliseconds(10))
         }
-        #expect(condition())
+    }
+}
+
+private struct WaitTimeout: Error, LocalizedError {
+    let description: String
+    let file: StaticString
+    let line: UInt
+
+    var errorDescription: String? {
+        "Timed out at \(file):\(line) while waiting for \(description)."
+    }
+}
+
+/// A test-only engine controller. Its first run cannot complete after yielding
+/// progress: it remains in a cancellation-aware suspension until its stream is
+/// terminated. Every later run completes immediately.
+private actor GenerationCancellationControl {
+    private var runCount = 0
+    private var firstRunSuspended = false
+    private var cancellationObserved = false
+    private var firstRunProgresses = 0
+    private var cancellationRequested = false
+    private var firstRunWaiter: CheckedContinuation<Void, Error>?
+
+    var firstRunIsSuspended: Bool { firstRunSuspended }
+    var didObserveCancellation: Bool { cancellationObserved }
+    var firstRunProgressCount: Int { firstRunProgresses }
+
+    func beginRun() -> Int {
+        runCount += 1
+        return runCount
+    }
+
+    func recordFirstRunProgress() {
+        firstRunProgresses += 1
+    }
+
+    func suspendFirstRunUntilCancelled() async throws {
+        try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                firstRunSuspended = true
+                if cancellationRequested {
+                    continuation.resume(throwing: CancellationError())
+                } else {
+                    firstRunWaiter = continuation
+                }
+            }
+        }, onCancel: {
+            Task { await self.cancelFirstRunWait() }
+        })
+    }
+
+    func cancelFirstRunWait() {
+        cancellationRequested = true
+        guard let firstRunWaiter else { return }
+        self.firstRunWaiter = nil
+        firstRunWaiter.resume(throwing: CancellationError())
+    }
+
+    func recordCancellationObserved() {
+        cancellationObserved = true
+    }
+}
+
+private struct ControllableGenerationEngine: GenerationEngine {
+    let control: GenerationCancellationControl
+
+    func generate(request: GenerationRequest) -> AsyncThrowingStream<GenerationEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task.detached { [control] in
+                let run = await control.beginRun()
+
+                if run == 1 {
+                    continuation.yield(.progress(step: 1, total: 1))
+                    await control.recordFirstRunProgress()
+
+                    do {
+                        try await control.suspendFirstRunUntilCancelled()
+                        continuation.finish()
+                    } catch is CancellationError {
+                        await control.recordCancellationObserved()
+                        continuation.finish(throwing: CancellationError())
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                    return
+                }
+
+                continuation.yield(.progress(step: 1, total: 1))
+                continuation.yield(.finished(GeneratedImage(
+                    pixels: Data([0, 0, 0, 255]),
+                    width: 1,
+                    height: 1
+                )))
+                continuation.finish()
+            }
+
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
     }
 }

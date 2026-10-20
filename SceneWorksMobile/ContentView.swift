@@ -7,16 +7,24 @@ import SwiftUI
 struct AppRootView: View {
     @State private var viewModel: ProvisioningViewModel
     private let engine: any GenerationEngine
+    private let photoSaver: any PhotoLibrarySaving
 
-    init(engine: any GenerationEngine, provisioner: ModelProvisioner, manifest: ModelManifest, storage: any StorageInspector) {
+    init(
+        engine: any GenerationEngine,
+        provisioner: ModelProvisioner,
+        manifest: ModelManifest,
+        storage: any StorageInspector,
+        photoSaver: any PhotoLibrarySaving
+    ) {
         self.engine = engine
+        self.photoSaver = photoSaver
         _viewModel = State(initialValue: ProvisioningViewModel(provisioner: provisioner, manifest: manifest, storage: storage))
     }
 
     var body: some View {
         Group {
             if viewModel.state == .ready {
-                GenerateView(engine: engine)
+                GenerateView(engine: engine, saver: photoSaver)
             } else {
                 ProvisioningView(viewModel: viewModel)
             }

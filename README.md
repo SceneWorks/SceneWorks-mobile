@@ -9,7 +9,7 @@ The SceneWorks iOS app: the SwiftUI shell of SceneWorks' on-device image generat
 | Path | What |
 | --- | --- |
 | `SceneWorksMobile.xcodeproj` | The Xcode project (synchronized folders: a new file in a target's folder is part of that target, no project edit needed) and its one shared scheme, `SceneWorksMobile` |
-| `SceneWorksMobile/` | The app target (`com.sceneworks.mobile`, iOS 18.0+, iPhone): `SceneWorksMobileApp` (composition point, reads the launch environment), `AppRootView` in `ContentView.swift` (the root: asks the provisioner whether the models are ready — `GenerateView` when they are, `ProvisioningView` when they are not), `GenerateView`, `GenerateViewModel`, `Generation/GenerationEngine.swift` (`GenerationEngine` protocol, `GenerationRequest`/`GenerationEvent`, and the fake engine), `Provisioning/` (model provisioning and the first-run screen, see below) |
+| `SceneWorksMobile/` | The app target (`com.sceneworks.mobile`, iOS 18.0+, iPhone): `SceneWorksMobileApp` (composition point, reads the launch environment), `AppRootView` in `ContentView.swift` (the root: asks the provisioner whether the models are ready — `GenerateView` when they are, `ProvisioningView` when they are not), `GenerateView`, `GenerateViewModel`, `Generation/GenerationEngine.swift` (`GenerationEngine` protocol, `GenerationRequest`/`GenerationEvent`, and the fake engine), `Provisioning/` (model provisioning and the first-run screen, see below), `Sharing/` (save-to-Photos and share, see below) |
 | `SceneWorksMobileTests/` | Unit tests (Swift Testing and XCTest), hosted in the app (`@testable import SceneWorksMobile`): `SceneWorksMobileTests` (engine and view model) and `ModelProvisionerTests` (provisioning over a fake `URLProtocol`, a fake `StorageInspector` and a temp directory) |
 | `SceneWorksMobileUITests/` | UI tests (XCUITest) |
 | `factory/gate.yaml`, `CODEOWNERS` | The Dark Factory merge gate's policy and the owners of its sealed paths |
@@ -51,6 +51,35 @@ the same way (`app.launchEnvironment[…]`). Together they drive the first-run p
 A fresh launch (no models) shows the provisioning screen; tapping Download runs the provisioner, and
 once the release is on disk a relaunch without `SCENEWORKS_RESET_MODELS` goes straight to the
 generate screen.
+
+## Save to Photos and share
+
+Once a generation shows its result, the generate screen offers a **Save** button
+(`saveButton`) and a **Share** control (`shareButton`). `SceneWorksMobile/Sharing/` is
+that feature end to end:
+
+| File | What |
+| --- | --- |
+| `ImageExporter.swift` | Encodes a `GeneratedImage` as lossless PNG (ImageIO) and names it `SceneWorks-<seed>.png` |
+| `PhotoLibrarySaving.swift` | The `PhotoLibrarySaving` seam and `PHPhotoLibraryPhotoSaver`, the production saver (add-only authorization) |
+| `FakePhotoLibrarySaver.swift` | A `PhotoLibrarySaving` that reports a chosen authorization from the launch environment, so UI tests need no system prompt |
+| `ExportedImage.swift` | The result as a `Transferable` PNG for the `ShareLink` |
+| `SaveViewModel.swift` | The `@MainActor` view model: encodes, saves, and reports the outcome |
+
+A denied or restricted Photos access shows a message explaining how to allow it;
+a successful save shows a confirmation (`saveConfirmation`). The app declares its
+Photos add access via the `INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription` build
+setting.
+
+Like the other fakes, the photo library is chosen at the composition point from the
+launch environment:
+
+| Variable | Values | Behavior |
+| --- | --- | --- |
+| `SCENEWORKS_FAKE_PHOTOS` | unset · `authorized` · `denied` · `restricted` | The authorization the fake photo library reports. Unset or `authorized` saves; `denied` or `restricted` shows the access-denied message and saves nothing. Unset uses the real `PHPhotoLibrary`. |
+
+Set it in the scheme's Run > Arguments > Environment Variables, or from the UI test
+target: `app.launchEnvironment["SCENEWORKS_FAKE_PHOTOS"] = "authorized"`.
 
 ## Model provisioning
 

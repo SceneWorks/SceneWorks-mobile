@@ -142,12 +142,15 @@ struct SceneWorksMobileTests {
     }
 
     /// Waits against a wall-clock deadline, so test-executor contention cannot
-    /// silently turn an iteration count into an unbounded wait. `file` and
-    /// `line` preserve which expectation actually timed out.
+    /// silently turn an iteration count into an unbounded wait. The unit target
+    /// runs its 1024-pixel image and PNG tests concurrently, so this completion
+    /// deadline allows a whole contended suite to make progress; it is not an
+    /// assertion that an individual fake generation should take this long.
+    /// `file` and `line` preserve which expectation actually timed out.
     @MainActor
     private func wait(
         for description: String,
-        timeout: Duration = .seconds(3),
+        timeout: Duration = .seconds(15),
         file: StaticString = #fileID,
         line: UInt = #line,
         until condition: @escaping @MainActor () async -> Bool
